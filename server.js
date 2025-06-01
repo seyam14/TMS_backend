@@ -97,6 +97,22 @@ app.get('/api/users', authenticate(['Admin']), async (req, res) => {
   res.json(users);
 });
 
+// Delete user (Admin only)
+app.delete('/api/users/:id', authenticate(['Admin']), async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await db.collection('users').deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    res.json({ message: 'User deleted' });
+  } catch (err) {
+    console.error('Error deleting user:', err);
+    res.status(500).json({ message: 'Failed to delete user' });
+  }
+});
+
+
 // Create ticket
 app.post('/api/tickets', authenticate(['Ticket Maker']), upload.array('attachments'), async (req, res) => {
   try {
