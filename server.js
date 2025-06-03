@@ -225,6 +225,7 @@ app.get('/api/tickets/:id', authenticate(), async (req, res) => {
 });
 
 // Update ticket (Checker, DFS Team, IT Team)
+// PUT /api/tickets/:id
 app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), async (req, res) => {
   const { id } = req.params;
   const update = req.body;
@@ -233,26 +234,36 @@ app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), as
     return res.status(400).json({ message: 'Remarks required for rejection' });
   }
 
-  // Optional: logic to assign based on forwarded team
-  if (req.user.role === 'Checker') {
-    if (update.status === 'Forwarded to DFS') {
-      update.assignedToRole = 'DFS Team';
-    } else if (update.status === 'Forwarded to IT') {
-      update.assignedToRole = 'IT Team';
-    }
-  }
-
   try {
+    if (req.user.role === 'Checker') {
+      // Convert forwarded status to assigned and assign user ID
+      if (update.status === 'Forwarded to DFS') {
+        const dfs = await db.collection('users').findOne({ role: 'DFS Team' });
+        if (!dfs) return res.status(400).json({ message: 'No DFS team user found' });
+
+        update.status = 'Assigned';
+        update.assignedTo = dfs._id.toString();
+      } else if (update.status === 'Forwarded to IT') {
+        const it = await db.collection('users').findOne({ role: 'IT Team' });
+        if (!it) return res.status(400).json({ message: 'No IT team user found' });
+
+        update.status = 'Assigned';
+        update.assignedTo = it._id.toString();
+      }
+    }
+
     await db.collection('tickets').updateOne(
       { _id: new ObjectId(id) },
       { $set: update }
     );
+
     res.json({ message: 'Ticket updated' });
   } catch (err) {
     console.error('Error updating ticket:', err);
     res.status(500).json({ message: 'Failed to update ticket' });
   }
 });
+
 
 // ===== GLOBAL ERROR HANDLER =====
 app.use((err, req, res, next) => {
