@@ -225,22 +225,18 @@ app.get('/api/tickets/:id', authenticate(), async (req, res) => {
 });
 
 // Update ticket (Checker, DFS Team, IT Team)
-// Import nodemailer or any notification system if you want real email notifications
-// const nodemailer = require('nodemailer');
 
 app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), async (req, res) => {
   const { id } = req.params;
   const update = req.body;
+
+  console.log('Update request from user role:', req.user.role, 'Update data:', update);
 
   if (update.status === 'Rejected' && !update.remarks) {
     return res.status(400).json({ message: 'Remarks required for rejection' });
   }
 
   try {
-    // Fetch existing ticket to get createdBy for notification
-    const ticket = await db.collection('tickets').findOne({ _id: new ObjectId(id) });
-    if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
-
     if (req.user.role === 'Checker') {
       if (update.status === 'Forwarded to DFS') {
         const dfs = await db.collection('users').findOne({ role: 'DFS Team' });
@@ -254,6 +250,8 @@ app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), as
 
         update.status = 'Assigned';
         update.assignedTo = it._id.toString();
+      } else {
+        return res.status(400).json({ message: 'Invalid assignment status from Checker' });
       }
     }
 
@@ -262,20 +260,23 @@ app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), as
       { $set: update }
     );
 
-    // Notify ticket creator that ticket was updated
-    const creator = await db.collection('users').findOne({ _id: new ObjectId(ticket.createdBy) });
-    if (creator) {
-      // Replace this with your actual notification logic (email, push, socket, etc.)
-      console.log(`Notify ${creator.email}: Your ticket "${ticket.title}" status updated to "${update.status}".`);
-      // Example: Send email or websocket notification here
+    // Notification to ticket creator (placeholder)
+    const ticket = await db.collection('tickets').findOne({ _id: new ObjectId(id) });
+    if (ticket) {
+      const creator = await db.collection('users').findOne({ _id: new ObjectId(ticket.createdBy) });
+      if (creator && creator.email) {
+        // Here you can implement email or real-time socket notification
+        console.log(`Notify creator (${creator.email}) about ticket update.`);
+      }
     }
 
-    res.json({ message: 'Ticket updated and creator notified' });
+    res.json({ message: 'Ticket updated' });
   } catch (err) {
     console.error('Error updating ticket:', err);
     res.status(500).json({ message: 'Failed to update ticket' });
   }
 });
+
 
 
 
