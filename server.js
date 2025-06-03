@@ -181,18 +181,6 @@ app.post('/api/tickets', authenticate(['Ticket Maker']), upload.array('attachmen
     res.status(500).json({ message: 'Error creating ticket' });
   }
 });
-// 
-//  Ticket Maker can only see their own tickets
-app.get('/api/tickets', authenticate(['Ticket Maker']), async (req, res) => {
-  try {
-    const tickets = await db.collection('tickets').find({ createdBy: req.user.id }).toArray();
-    res.json(tickets);
-  } catch (err) {
-    console.error('Fetch error:', err);
-    res.status(500).json({ message: 'Error fetching tickets' });
-  }
-});
-
 
 // Get tickets (filtered by user role)
 app.get('/api/tickets', authenticate(), async (req, res) => {
