@@ -18,7 +18,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
-// Multer setup
+// Multer setup for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, 'uploads/'),
   filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
@@ -30,12 +30,7 @@ let db;
 MongoClient.connect(mongoUri)
   .then(client => {
     db = client.db();
-    console.log('connected MongoDB ');
-
-    // Root route
-    app.get('/', (req, res) => {
-      res.send('Hello niloy! Server is running');
-    });
+    console.log('Connected to MongoDB');
 
     // Start server after DB is connected
     app.listen(port, () => {
@@ -46,7 +41,12 @@ MongoClient.connect(mongoUri)
     console.error('MongoDB connection error:', err);
   });
 
-// JWT Authentication middleware
+// Root test route
+app.get('/', (req, res) => {
+  res.send('Hello niloy! Server is running');
+});
+
+// JWT auth middleware
 const authenticate = (roles = []) => (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ message: 'Missing token' });
@@ -59,46 +59,38 @@ const authenticate = (roles = []) => (req, res, next) => {
   });
 };
 
-// Routes
+// ===== AUTH ROUTES =====
 
-// Register
+// Register Ticket Maker
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password, role, ticketMakerId } = req.body;
-
-    // Check required fields
     if (!name || !email || !password || !role) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    // Only allow Ticket Maker to register via this route
     if (role !== 'Ticket Maker') {
       return res.status(403).json({ message: 'Only Ticket Maker can register from this form' });
     }
 
-    // Ensure Ticket Maker ID is provided
     if (!ticketMakerId) {
       return res.status(400).json({ message: 'Ticket Maker ID is required' });
     }
 
     const usersCollection = db.collection('users');
 
-    // Check if email already exists
     const existingUser = await usersCollection.findOne({ email });
     if (existingUser) {
       return res.status(409).json({ message: 'Email already exists' });
     }
 
-    // Check if Ticket Maker ID is unique
     const existingId = await usersCollection.findOne({ ticketMakerId });
     if (existingId) {
       return res.status(409).json({ message: 'Ticket Maker ID already exists' });
     }
 
-    // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Insert user
     await usersCollection.insertOne({
       name,
       email,
@@ -115,7 +107,6 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-
 // Login
 app.post('/api/auth/login', async (req, res) => {
   try {
@@ -124,12 +115,20 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
-    const token = jwt.sign({ id: user._id, role: user.role, name: user.name }, jwtSecret, { expiresIn: '1d' });
+
+    const token = jwt.sign(
+      { id: user._id, role: user.role, name: user.name },
+      jwtSecret,
+      { expiresIn: '1d' }
+    );
+
     res.json({ token, user: { id: user._id, name: user.name, role: user.role } });
   } catch (err) {
     res.status(500).json({ message: 'Error logging in' });
   }
 });
+
+// ===== USER ROUTES =====
 
 // Get all users (Admin only)
 app.get('/api/users', authenticate(['Admin']), async (req, res) => {
@@ -137,7 +136,7 @@ app.get('/api/users', authenticate(['Admin']), async (req, res) => {
   res.json(users);
 });
 
-// Delete user (Admin only)
+// Delete a user (Admin only)
 app.delete('/api/users/:id', authenticate(['Admin']), async (req, res) => {
   const { id } = req.params;
   try {
@@ -152,13 +151,12 @@ app.delete('/api/users/:id', authenticate(['Admin']), async (req, res) => {
   }
 });
 
+// ===== TICKET ROUTES =====
 
-// Create ticket
+// Create a ticket
 app.post('/api/tickets', authenticate(['Ticket Maker']), upload.array('attachments'), async (req, res) => {
   try {
     const { title, description, priority } = req.body;
-
-    // Safely handle file uploads (if any)
     const attachments = req.files?.map(file => file.path) || [];
 
     const ticket = {
@@ -167,6 +165,7 @@ app.post('/api/tickets', authenticate(['Ticket Maker']), upload.array('attachmen
       priority,
       status: 'Pending',
       assignedTo: null,
+      assignedToRole: null,
       createdBy: req.user.id,
       attachments,
       createdAt: new Date()
@@ -175,32 +174,57 @@ app.post('/api/tickets', authenticate(['Ticket Maker']), upload.array('attachmen
     await db.collection('tickets').insertOne(ticket);
     res.status(201).json({ message: 'Ticket submitted' });
   } catch (err) {
-    console.error('Error creating ticket:', err); // log the error for debugging
+    console.error('Error creating ticket:', err);
     res.status(500).json({ message: 'Error creating ticket' });
   }
 });
 
-
-// Get tickets
+// Get tickets (filtered by user role)
 app.get('/api/tickets', authenticate(), async (req, res) => {
-  const filter = req.user.role === 'Ticket Maker'
-    ? { createdBy: req.user.id }
-    : req.user.role === 'Checker'
-      ? { status: 'Pending' }
-      : {};
-  const tickets = await db.collection('tickets').find(filter).toArray();
-  res.json(tickets);
+  const user = req.user;
+  const ticketsCollection = db.collection('tickets');
+  let filter = {};
+
+  switch (user.role) {
+    case 'Ticket Maker':
+      filter = { createdBy: user.id };
+      break;
+    case 'Checker':
+      filter = { status: 'Pending' };
+      break;
+    case 'DFS Team':
+    case 'IT Team':
+      filter = { assignedTo: user.id };
+      break;
+    case 'Admin':
+      filter = {};
+      break;
+    default:
+      return res.status(403).json({ message: 'Unauthorized role' });
+  }
+
+  try {
+    const tickets = await ticketsCollection.find(filter).toArray();
+    res.json(tickets);
+  } catch (err) {
+    console.error('Error fetching tickets:', err);
+    res.status(500).json({ message: 'Error retrieving tickets' });
+  }
 });
 
 // Get ticket by ID
 app.get('/api/tickets/:id', authenticate(), async (req, res) => {
   const { id } = req.params;
-  const ticket = await db.collection('tickets').findOne({ _id: new ObjectId(id) });
-  if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
-  res.json(ticket);
+  try {
+    const ticket = await db.collection('tickets').findOne({ _id: new ObjectId(id) });
+    if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
+    res.json(ticket);
+  } catch (err) {
+    res.status(500).json({ message: 'Error fetching ticket' });
+  }
 });
 
-// Update ticket
+// Update ticket (Checker, DFS Team, IT Team)
 app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), async (req, res) => {
   const { id } = req.params;
   const update = req.body;
@@ -209,11 +233,28 @@ app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), as
     return res.status(400).json({ message: 'Remarks required for rejection' });
   }
 
-  await db.collection('tickets').updateOne({ _id: new ObjectId(id) }, { $set: update });
-  res.json({ message: 'Ticket updated' });
+  // Optional: logic to assign based on forwarded team
+  if (req.user.role === 'Checker') {
+    if (update.status === 'Forwarded to DFS') {
+      update.assignedToRole = 'DFS Team';
+    } else if (update.status === 'Forwarded to IT') {
+      update.assignedToRole = 'IT Team';
+    }
+  }
+
+  try {
+    await db.collection('tickets').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: update }
+    );
+    res.json({ message: 'Ticket updated' });
+  } catch (err) {
+    console.error('Error updating ticket:', err);
+    res.status(500).json({ message: 'Failed to update ticket' });
+  }
 });
 
-// Error handler
+// ===== GLOBAL ERROR HANDLER =====
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.stack);
   res.status(500).json({ message: 'Internal server error' });
