@@ -19,11 +19,22 @@ app.use(express.json());
 app.use('/uploads', express.static('uploads'));
 
 // Multer setup for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif|pdf/;
+  const ext = path.extname(file.originalname).toLowerCase();
+  const mime = file.mimetype;
+
+  if (allowedTypes.test(ext) && (mime.startsWith('image/') || mime === 'application/pdf')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only images (jpeg, jpg, png, gif) and PDFs are allowed'));
+  }
+};
+const upload = multer({
+  dest: 'uploads/',
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB limit
+  fileFilter: fileFilter,
 });
-const upload = multer({ storage });
 
 // MongoDB setup
 let db;
@@ -62,50 +73,42 @@ const authenticate = (roles = []) => (req, res, next) => {
 // ===== AUTH ROUTES =====
 
 // Register Ticket Maker
+// 
+// Only allow Ticket Maker to register from frontend
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, role, ticketMakerId } = req.body;
-    if (!name || !email || !password || !role) {
-      return res.status(400).json({ message: 'All fields are required' });
+    const { name, email, password, ticketId } = req.body;
+    if (!name || !email || !password || !ticketId) {
+      return res.status(400).json({ message: 'Name, email, password, and Ticket ID are required' });
     }
 
-    if (role !== 'Ticket Maker') {
-      return res.status(403).json({ message: 'Only Ticket Maker can register from this form' });
-    }
+    // Check if email or ticketId already exists
+    const existingEmail = await db.collection('users').findOne({ email });
+    if (existingEmail) return res.status(400).json({ message: 'Email already exists' });
 
-    if (!ticketMakerId) {
-      return res.status(400).json({ message: 'Ticket Maker ID is required' });
-    }
-
-    const usersCollection = db.collection('users');
-
-    const existingUser = await usersCollection.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ message: 'Email already exists' });
-    }
-
-    const existingId = await usersCollection.findOne({ ticketMakerId });
-    if (existingId) {
-      return res.status(409).json({ message: 'Ticket Maker ID already exists' });
-    }
+    const existingTicketId = await db.collection('users').findOne({ ticketId });
+    if (existingTicketId) return res.status(400).json({ message: 'Ticket ID already exists' });
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    await usersCollection.insertOne({
+    const newUser = {
       name,
       email,
       password: hashedPassword,
-      role,
-      ticketMakerId,
+      ticketId,
+      role: 'Ticket Maker', // hardcoded role
       createdAt: new Date(),
-    });
+    };
 
-    res.status(201).json({ message: 'Ticket Maker registered successfully' });
+    await db.collection('users').insertOne(newUser);
+
+    res.status(201).json({ message: 'Registration successful' });
   } catch (err) {
-    console.error('Registration error:', err);
-    res.status(500).json({ message: 'Error registering user' });
+    console.error('Register error:', err);
+    res.status(500).json({ message: 'Server error' });
   }
 });
+
 
 // Login
 app.post('/api/auth/login', async (req, res) => {
@@ -178,6 +181,18 @@ app.post('/api/tickets', authenticate(['Ticket Maker']), upload.array('attachmen
     res.status(500).json({ message: 'Error creating ticket' });
   }
 });
+// 
+//  Ticket Maker can only see their own tickets
+app.get('/api/tickets', authenticate(['Ticket Maker']), async (req, res) => {
+  try {
+    const tickets = await db.collection('tickets').find({ createdBy: req.user.id }).toArray();
+    res.json(tickets);
+  } catch (err) {
+    console.error('Fetch error:', err);
+    res.status(500).json({ message: 'Error fetching tickets' });
+  }
+});
+
 
 // Get tickets (filtered by user role)
 app.get('/api/tickets', authenticate(), async (req, res) => {
@@ -280,8 +295,12 @@ app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), as
 
 
 
-// ===== GLOBAL ERROR HANDLER =====
+// Global error handler
 app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError || err.message.includes('Only images')) {
+    return res.status(400).json({ message: err.message });
+  }
   console.error('Unhandled error:', err.stack);
   res.status(500).json({ message: 'Internal server error' });
 });
+
