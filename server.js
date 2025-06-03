@@ -225,7 +225,9 @@ app.get('/api/tickets/:id', authenticate(), async (req, res) => {
 });
 
 // Update ticket (Checker, DFS Team, IT Team)
-// PUT /api/tickets/:id
+// Import nodemailer or any notification system if you want real email notifications
+// const nodemailer = require('nodemailer');
+
 app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), async (req, res) => {
   const { id } = req.params;
   const update = req.body;
@@ -235,8 +237,11 @@ app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), as
   }
 
   try {
+    // Fetch existing ticket to get createdBy for notification
+    const ticket = await db.collection('tickets').findOne({ _id: new ObjectId(id) });
+    if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
+
     if (req.user.role === 'Checker') {
-      // Convert forwarded status to assigned and assign user ID
       if (update.status === 'Forwarded to DFS') {
         const dfs = await db.collection('users').findOne({ role: 'DFS Team' });
         if (!dfs) return res.status(400).json({ message: 'No DFS team user found' });
@@ -257,12 +262,21 @@ app.put('/api/tickets/:id', authenticate(['Checker', 'DFS Team', 'IT Team']), as
       { $set: update }
     );
 
-    res.json({ message: 'Ticket updated' });
+    // Notify ticket creator that ticket was updated
+    const creator = await db.collection('users').findOne({ _id: new ObjectId(ticket.createdBy) });
+    if (creator) {
+      // Replace this with your actual notification logic (email, push, socket, etc.)
+      console.log(`Notify ${creator.email}: Your ticket "${ticket.title}" status updated to "${update.status}".`);
+      // Example: Send email or websocket notification here
+    }
+
+    res.json({ message: 'Ticket updated and creator notified' });
   } catch (err) {
     console.error('Error updating ticket:', err);
     res.status(500).json({ message: 'Failed to update ticket' });
   }
 });
+
 
 
 // ===== GLOBAL ERROR HANDLER =====
