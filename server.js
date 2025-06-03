@@ -64,17 +64,57 @@ const authenticate = (roles = []) => (req, res, next) => {
 // Register
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
-    const existingUser = await db.collection('users').findOne({ email });
-    if (existingUser) return res.status(409).json({ message: 'Email already exists' });
+    const { name, email, password, role, ticketMakerId } = req.body;
 
+    // Check required fields
+    if (!name || !email || !password || !role) {
+      return res.status(400).json({ message: 'All fields are required' });
+    }
+
+    // Only allow Ticket Maker to register via this route
+    if (role !== 'Ticket Maker') {
+      return res.status(403).json({ message: 'Only Ticket Maker can register from this form' });
+    }
+
+    // Ensure Ticket Maker ID is provided
+    if (!ticketMakerId) {
+      return res.status(400).json({ message: 'Ticket Maker ID is required' });
+    }
+
+    const usersCollection = db.collection('users');
+
+    // Check if email already exists
+    const existingUser = await usersCollection.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({ message: 'Email already exists' });
+    }
+
+    // Check if Ticket Maker ID is unique
+    const existingId = await usersCollection.findOne({ ticketMakerId });
+    if (existingId) {
+      return res.status(409).json({ message: 'Ticket Maker ID already exists' });
+    }
+
+    // Hash the password
     const hashedPassword = await bcrypt.hash(password, 10);
-    await db.collection('users').insertOne({ name, email, password: hashedPassword, role });
-    res.status(201).json({ message: 'User registered' });
+
+    // Insert user
+    await usersCollection.insertOne({
+      name,
+      email,
+      password: hashedPassword,
+      role,
+      ticketMakerId,
+      createdAt: new Date(),
+    });
+
+    res.status(201).json({ message: 'Ticket Maker registered successfully' });
   } catch (err) {
+    console.error('Registration error:', err);
     res.status(500).json({ message: 'Error registering user' });
   }
 });
+
 
 // Login
 app.post('/api/auth/login', async (req, res) => {
