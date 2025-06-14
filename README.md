@@ -6,4 +6,3 @@ cd backend
 npm install
 npm run dev
 ```
-render address:https://tms-backend-q1jq.onrender.com
